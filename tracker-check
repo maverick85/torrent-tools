@@ -13,50 +13,73 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5):
     print(f"Settings: {retries} max attempts per tracker, {timeout}s timeout\n")
     print("-" * 50)
     
+    # Initialize our summary statistics
+    stats = {
+        'active': 0,
+        'unknown': 0,
+        'failed': 0,
+        'total_seeders': 0,
+        'total_leechers': 0
+    }
+    
     for tracker in tracker_urls:
         print(f"Querying: {tracker}")
         
         # Retry loop for flaky trackers
         for attempt in range(1, retries + 1):
-            # Create a fresh scraper for every attempt to prevent ghost errors
             scraper = Scraper()
-            
             results = scraper.scrape(hashes=[info_hash], trackers=[tracker], timeout=timeout)
             data = results.get(info_hash)
             
             if data:
-                # Tracker responded perfectly! Let's check the peer counts.
                 if data['seeders'] == 0 and data['leechers'] == 0 and data['completed'] == 0:
                     print(f"  ⚠️ RESPONDED, BUT UNKNOWN: Tracker is online, but knows nothing about this hash.")
+                    stats['unknown'] += 1
                 else:
                     print(f"  ✅ SUCCESS: Hash known and active!")
                     print(f"     Seeders: {data['seeders']} | Leechers: {data['leechers']} | Completed: {data['completed']}")
+                    stats['active'] += 1
+                    stats['total_seeders'] += data['seeders']
+                    stats['total_leechers'] += data['leechers']
                 
-                # Success means we don't need to retry; break out of the retry loop
+                # Break out of the retry loop on a successful connection
                 break 
                 
             else:
-                # Tracker failed to return valid peer data
-                error_msg = "Unknown error"
-                if scraper.has_errors():
-                    error_msg = scraper.get_errors()[-1]
+                error_msg = scraper.get_errors()[-1] if scraper.has_errors() else "Unknown error"
 
-                # If this isn't our last attempt, we retry
                 if attempt < retries:
                     print(f"     [Attempt {attempt}/{retries} failed] Retrying...")
                     continue
                 else:
-                    # Out of retries, evaluate the final error
+                    stats['failed'] += 1
                     if "time out" in error_msg.lower() or "timed out" in error_msg.lower():
                         print(f"  ❌ FAILED: Tracker is offline or unreachable (Timed out after {retries} attempts).")
                     elif "failed to parse" in error_msg.lower():
-                        print(f"  ❌ FAILED: Tracker rejected the request or returned an error page (Likely unregistered torrent).")
+                        print(f"  ❌ FAILED: Tracker rejected the request or returned an error page.")
                         print(f"     Details: {error_msg}")
                     else:
                         print(f"  ❌ FAILED: Connection error.")
                         print(f"     Details: {error_msg}")
                     
         print("-" * 50)
+
+    # ---------------------------------------------------------
+    # PRINT FINAL SUMMARY BOARD
+    # ---------------------------------------------------------
+    print("\n" + "=" * 50)
+    print("📊 FINAL SCRAPE SUMMARY")
+    print("=" * 50)
+    print(f"Total Trackers Checked : {len(tracker_urls)}")
+    print(f"🟢 Active (Has Peers)  : {stats['active']}")
+    print(f"🟡 Online (0 Peers)    : {stats['unknown']}")
+    print(f"🔴 Failed/Offline      : {stats['failed']}")
+    print("-" * 50)
+    print(f"Total Seeders Found    : {stats['total_seeders']} *")
+    print(f"Total Leechers Found   : {stats['total_leechers']} *")
+    print("* Note: Global peer counts usually contain duplicates")
+    print("  as clients announce to multiple trackers at once.")
+    print("=" * 50 + "\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Robustly check a torrent info hash against a list of trackers.")
