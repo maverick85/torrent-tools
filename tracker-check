@@ -8,59 +8,77 @@ from scrapeer import Scraper
 # Mute the verbose scrapeer INFO/ERROR logs so your terminal stays clean
 logging.getLogger('scrapeer.scraper').setLevel(logging.CRITICAL)
 
-def check_hash_against_trackers(info_hash, tracker_urls):
-    print(f"Checking info hash: {info_hash}\n")
+def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5):
+    print(f"Checking info hash: {info_hash}")
+    print(f"Settings: {retries} max attempts per tracker, {timeout}s timeout\n")
     print("-" * 50)
     
     for tracker in tracker_urls:
-        # Create a fresh scraper for every single tracker to prevent ghost errors
-        scraper = Scraper()
-        
         print(f"Querying: {tracker}")
         
-        # We query them one by one to see individual tracker responses
-        results = scraper.scrape(hashes=[info_hash], trackers=[tracker], timeout=3)
-        
-        # Scrapeer aggregates results by info hash
-        data = results.get(info_hash)
-        
-        if data:
-            print(f"  ✅ SUCCESS: Hash known!")
-            print(f"     Seeders: {data['seeders']} | Leechers: {data['leechers']} | Completed: {data['completed']}")
-        else:
-            print("  ❌ FAILED: Hash not found or tracker didn't respond.")
+        # Retry loop for flaky trackers
+        for attempt in range(1, retries + 1):
+            # Create a fresh scraper for every attempt to prevent ghost errors
+            scraper = Scraper()
             
-            # Moved inside the failure block so it only checks errors if it actually failed
-            if scraper.has_errors():
-                # Get the most recent error
-                error_msg = scraper.get_errors()[-1]
-                print(f"     Error Info: {error_msg}")
+            results = scraper.scrape(hashes=[info_hash], trackers=[tracker], timeout=timeout)
+            data = results.get(info_hash)
             
+            if data:
+                # Tracker responded perfectly! Let's check the peer counts.
+                if data['seeders'] == 0 and data['leechers'] == 0 and data['completed'] == 0:
+                    print(f"  ⚠️ RESPONDED, BUT UNKNOWN: Tracker is online, but knows nothing about this hash.")
+                else:
+                    print(f"  ✅ SUCCESS: Hash known and active!")
+                    print(f"     Seeders: {data['seeders']} | Leechers: {data['leechers']} | Completed: {data['completed']}")
+                
+                # Success means we don't need to retry; break out of the retry loop
+                break 
+                
+            else:
+                # Tracker failed to return valid peer data
+                error_msg = "Unknown error"
+                if scraper.has_errors():
+                    error_msg = scraper.get_errors()[-1]
+
+                # If this isn't our last attempt, we retry
+                if attempt < retries:
+                    print(f"     [Attempt {attempt}/{retries} failed] Retrying...")
+                    continue
+                else:
+                    # Out of retries, evaluate the final error
+                    if "time out" in error_msg.lower() or "timed out" in error_msg.lower():
+                        print(f"  ❌ FAILED: Tracker is offline or unreachable (Timed out after {retries} attempts).")
+                    elif "failed to parse" in error_msg.lower():
+                        print(f"  ❌ FAILED: Tracker rejected the request or returned an error page (Likely unregistered torrent).")
+                        print(f"     Details: {error_msg}")
+                    else:
+                        print(f"  ❌ FAILED: Connection error.")
+                        print(f"     Details: {error_msg}")
+                    
         print("-" * 50)
 
 def main():
-    # Set up command-line arguments
-    parser = argparse.ArgumentParser(description="Check a torrent info hash against a list of trackers from a file.")
+    parser = argparse.ArgumentParser(description="Robustly check a torrent info hash against a list of trackers.")
     parser.add_argument("-H", "--hash", required=True, help="The 40-character hex info hash of the torrent.")
     parser.add_argument("-f", "--file", required=True, help="Path to the text file containing trackers (one per line).")
+    parser.add_argument("-t", "--timeout", type=int, default=5, help="Seconds to wait for a tracker response (default: 5).")
+    parser.add_argument("-r", "--retries", type=int, default=3, help="Number of times to retry a failed tracker (default: 3).")
     
     args = parser.parse_args()
     info_hash = args.hash.lower()
     
-    # Basic validation
     if len(info_hash) != 40:
-        print(f"Warning: Info hash '{info_hash}' is not 40 characters long. Standard BitTorrent hashes are 40-character hex strings.")
+        print(f"Warning: Info hash '{info_hash}' is not 40 characters long.")
     
     if not os.path.isfile(args.file):
         print(f"Error: The file '{args.file}' does not exist or cannot be read.")
         sys.exit(1)
 
-    # Read the trackers from the file
     trackers = []
     with open(args.file, 'r', encoding='utf-8') as f:
         for line in f:
             tracker = line.strip()
-            # Ignore empty lines or lines that start with a '#' (comments)
             if tracker and not tracker.startswith('#'):
                 trackers.append(tracker)
 
@@ -68,8 +86,7 @@ def main():
         print(f"Error: No valid trackers found in '{args.file}'.")
         sys.exit(1)
 
-    # Run the scraper
-    check_hash_against_trackers(info_hash, trackers)
+    check_hash_against_trackers(info_hash, trackers, args.retries, args.timeout)
 
 if __name__ == "__main__":
     main()
