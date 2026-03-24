@@ -17,3 +17,4 @@ Flags:
 - `-f` or `--file`: The tracker file list. One tracker per line.
 - `-r` or `--retries`: retries
 - `-t` or `--timeout`: timeout in seconds
+- `-o` or `--output`: output file with active trackers
