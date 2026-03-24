@@ -15,3 +15,5 @@ Run: `tracker-check -H <hash> -f <tracker-file-location>`
 Flags:
 - `-H` or `--hash`: The torrent hash
 - `-f` or `--file`: The tracker file list. One tracker per line.
+- `-r`: retries
+- `-t`: timeout in seconds
