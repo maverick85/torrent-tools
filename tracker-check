@@ -8,12 +8,12 @@ from scrapeer import Scraper
 # Mute the verbose scrapeer INFO/ERROR logs so your terminal stays clean
 logging.getLogger('scrapeer.scraper').setLevel(logging.CRITICAL)
 
-def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5):
+def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5, output_file=None):
     print(f"Checking info hash: {info_hash}")
     print(f"Settings: {retries} max attempts per tracker, {timeout}s timeout\n")
     print("-" * 50)
     
-    # Initialize our summary statistics
+    # Initialize our summary statistics and lists
     stats = {
         'active': 0,
         'unknown': 0,
@@ -21,6 +21,8 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5):
         'total_seeders': 0,
         'total_leechers': 0
     }
+    
+    active_trackers_list = []
     
     for tracker in tracker_urls:
         print(f"Querying: {tracker}")
@@ -41,6 +43,7 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5):
                     stats['active'] += 1
                     stats['total_seeders'] += data['seeders']
                     stats['total_leechers'] += data['leechers']
+                    active_trackers_list.append(tracker)
                 
                 # Break out of the retry loop on a successful connection
                 break 
@@ -79,7 +82,22 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5):
     print(f"Total Leechers Found   : {stats['total_leechers']} *")
     print("* Note: Global peer counts usually contain duplicates")
     print("  as clients announce to multiple trackers at once.")
-    print("=" * 50 + "\n")
+    print("=" * 50)
+
+    # ---------------------------------------------------------
+    # HANDLE FILE EXPORT
+    # ---------------------------------------------------------
+    if output_file:
+        if active_trackers_list:
+            try:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    for t in active_trackers_list:
+                        f.write(t + "\n")
+                print(f"💾 Saved {len(active_trackers_list)} active trackers to '{output_file}'\n")
+            except Exception as e:
+                print(f"⚠️ Error saving to file: {e}\n")
+        else:
+            print(f"⚠️ No active trackers found. The output file '{output_file}' was not created.\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Robustly check a torrent info hash against a list of trackers.")
@@ -87,6 +105,7 @@ def main():
     parser.add_argument("-f", "--file", required=True, help="Path to the text file containing trackers (one per line).")
     parser.add_argument("-t", "--timeout", type=int, default=5, help="Seconds to wait for a tracker response (default: 5).")
     parser.add_argument("-r", "--retries", type=int, default=3, help="Number of times to retry a failed tracker (default: 3).")
+    parser.add_argument("-o", "--output", type=str, help="Optional: Path to save a text file containing ONLY the active trackers.")
     
     args = parser.parse_args()
     info_hash = args.hash.lower()
@@ -109,7 +128,7 @@ def main():
         print(f"Error: No valid trackers found in '{args.file}'.")
         sys.exit(1)
 
-    check_hash_against_trackers(info_hash, trackers, args.retries, args.timeout)
+    check_hash_against_trackers(info_hash, trackers, args.retries, args.timeout, args.output)
 
 if __name__ == "__main__":
     main()
