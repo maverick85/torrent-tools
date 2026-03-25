@@ -11,10 +11,17 @@
 - Make the file executable with `chmod +x tracker-check`
 
 #### Usage
-Run: `tracker-check -H <hash>`
+usage: tracker-check [-h] (-H HASH | -T TORRENT) [-I] [-f FILE] [-t TIMEOUT] [-r RETRIES] [-o OUTPUT]
+tracker-check: error: one of the arguments -H/--hash -T/--torrent is required
+
+`tracker-check -H <hash>`: scrapes an hash against the torrent list
+`tracker-check -T <torrent> -I`: Prints torrent information
+`tracker-check -T <torrent>`: Extracts the torrent hash and scrapes against the tracker list
 
 Flags:
-- `-H` or `--hash`: The torrent hash
+- `-H` or `--hash`: Torrent hash
+- `-T` or `--torrent`: Torrent file
+- `-I` or `--info`: Extract torrent info (Used with `-T`/`--torrent`)
 - `-f` or `--file`: Optional: The tracker file list. One tracker per line.
 - `-r` or `--retries`: Optional: retries
 - `-t` or `--timeout`: Optional: timeout in seconds
