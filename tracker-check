@@ -3,35 +3,83 @@ import argparse
 import sys
 import os
 import logging
+import random
+import string
+import requests
+import bencodepy
 from scrapeer import Scraper
 
-# Mute the verbose scrapeer INFO/ERROR logs so your terminal stays clean
+# Mute the verbose scrapeer INFO/ERROR logs
 logging.getLogger('scrapeer.scraper').setLevel(logging.CRITICAL)
+
+def check_http_tracker(tracker_url, info_hash, timeout=5):
+    """Custom HTTP/HTTPS announce to mimic qBittorrent and bypass bot filters."""
+    try:
+        peer_id = '-qB4630-' + ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+        
+        params = {
+            'info_hash': bytes.fromhex(info_hash),
+            'peer_id': peer_id.encode('utf-8'),
+            'port': 6881,
+            'uploaded': 0,
+            'downloaded': 0,
+            'left': 1000,
+            'compact': 1,
+            'event': 'started'
+        }
+        
+        headers = {
+            'User-Agent': 'qBittorrent/4.6.3',
+            'Accept-Encoding': 'gzip'
+        }
+        
+        response = requests.get(tracker_url, params=params, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        
+        data = bencodepy.decode(response.content)
+        
+        seeders = data.get(b'complete', 0)
+        leechers = data.get(b'incomplete', 0)
+        completed = data.get(b'downloaded', 0)
+        
+        if b'failure reason' in data:
+            return None, data[b'failure reason'].decode('utf-8')
+            
+        return {'seeders': seeders, 'leechers': leechers, 'completed': completed}, None
+
+    except requests.exceptions.Timeout:
+        return None, "Connection timed out"
+    except requests.exceptions.RequestException as e:
+        return None, f"HTTP Error: {e}"
+    except bencodepy.exceptions.BencodeDecodeError:
+        return None, "Failed to parse response (Likely blocked by Cloudflare/Anti-bot)"
+    except Exception as e:
+        return None, str(e)
 
 def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5, output_file=None):
     print(f"Checking info hash: {info_hash}")
     print(f"Settings: {retries} max attempts per tracker, {timeout}s timeout\n")
     print("-" * 50)
     
-    # Initialize our summary statistics and lists
-    stats = {
-        'active': 0,
-        'unknown': 0,
-        'failed': 0,
-        'total_seeders': 0,
-        'total_leechers': 0
-    }
-    
+    stats = {'active': 0, 'unknown': 0, 'failed': 0, 'total_seeders': 0, 'total_leechers': 0}
     active_trackers_list = []
     
     for tracker in tracker_urls:
         print(f"Querying: {tracker}")
+        is_http = tracker.startswith('http')
         
-        # Retry loop for flaky trackers
         for attempt in range(1, retries + 1):
-            scraper = Scraper()
-            results = scraper.scrape(hashes=[info_hash], trackers=[tracker], timeout=timeout)
-            data = results.get(info_hash)
+            data = None
+            error_msg = "Unknown error"
+
+            if is_http:
+                data, error_msg = check_http_tracker(tracker, info_hash, timeout)
+            else:
+                scraper = Scraper()
+                results = scraper.scrape(hashes=[info_hash], trackers=[tracker], timeout=timeout)
+                data = results.get(info_hash)
+                if not data and scraper.has_errors():
+                    error_msg = scraper.get_errors()[-1]
             
             if data:
                 if data['seeders'] == 0 and data['leechers'] == 0 and data['completed'] == 0:
@@ -44,32 +92,18 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5, o
                     stats['total_seeders'] += data['seeders']
                     stats['total_leechers'] += data['leechers']
                     active_trackers_list.append(tracker)
-                
-                # Break out of the retry loop on a successful connection
                 break 
                 
             else:
-                error_msg = scraper.get_errors()[-1] if scraper.has_errors() else "Unknown error"
-
                 if attempt < retries:
                     print(f"     [Attempt {attempt}/{retries} failed] Retrying...")
                     continue
                 else:
                     stats['failed'] += 1
-                    if "time out" in error_msg.lower() or "timed out" in error_msg.lower():
-                        print(f"  ❌ FAILED: Tracker is offline or unreachable (Timed out after {retries} attempts).")
-                    elif "failed to parse" in error_msg.lower():
-                        print(f"  ❌ FAILED: Tracker rejected the request or returned an error page.")
-                        print(f"     Details: {error_msg}")
-                    else:
-                        print(f"  ❌ FAILED: Connection error.")
-                        print(f"     Details: {error_msg}")
+                    print(f"  ❌ FAILED: {error_msg}")
                     
         print("-" * 50)
 
-    # ---------------------------------------------------------
-    # PRINT FINAL SUMMARY BOARD
-    # ---------------------------------------------------------
     print("\n" + "=" * 50)
     print("📊 FINAL SCRAPE SUMMARY")
     print("=" * 50)
@@ -81,12 +115,8 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5, o
     print(f"Total Seeders Found    : {stats['total_seeders']} *")
     print(f"Total Leechers Found   : {stats['total_leechers']} *")
     print("* Note: Global peer counts usually contain duplicates")
-    print("  as clients announce to multiple trackers at once.")
     print("=" * 50)
 
-    # ---------------------------------------------------------
-    # HANDLE FILE EXPORT
-    # ---------------------------------------------------------
     if output_file:
         if active_trackers_list:
             try:
@@ -96,13 +126,12 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5, o
                 print(f"💾 Saved {len(active_trackers_list)} active trackers to '{output_file}'\n")
             except Exception as e:
                 print(f"⚠️ Error saving to file: {e}\n")
-        else:
-            print(f"⚠️ No active trackers found. The output file '{output_file}' was not created.\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Robustly check a torrent info hash against a list of trackers.")
     parser.add_argument("-H", "--hash", required=True, help="The 40-character hex info hash of the torrent.")
-    parser.add_argument("-f", "--file", required=True, help="Path to the text file containing trackers (one per line).")
+    # Made --file optional (required=False)
+    parser.add_argument("-f", "--file", required=False, help="Path to the text file containing trackers. Defaults to maverick85's GitHub list if omitted.")
     parser.add_argument("-t", "--timeout", type=int, default=5, help="Seconds to wait for a tracker response (default: 5).")
     parser.add_argument("-r", "--retries", type=int, default=3, help="Number of times to retry a failed tracker (default: 3).")
     parser.add_argument("-o", "--output", type=str, help="Optional: Path to save a text file containing ONLY the active trackers.")
@@ -113,19 +142,43 @@ def main():
     if len(info_hash) != 40:
         print(f"Warning: Info hash '{info_hash}' is not 40 characters long.")
     
-    if not os.path.isfile(args.file):
-        print(f"Error: The file '{args.file}' does not exist or cannot be read.")
-        sys.exit(1)
-
     trackers = []
-    with open(args.file, 'r', encoding='utf-8') as f:
-        for line in f:
-            tracker = line.strip()
-            if tracker and not tracker.startswith('#'):
-                trackers.append(tracker)
+    
+    # Check if a local file was provided
+    if args.file:
+        if not os.path.isfile(args.file):
+            print(f"Error: The file '{args.file}' does not exist or cannot be read.")
+            sys.exit(1)
+            
+        print(f"📂 Reading trackers from local file: {args.file}")
+        with open(args.file, 'r', encoding='utf-8') as f:
+            for line in f:
+                tracker = line.strip()
+                if tracker and not tracker.startswith('#'):
+                    trackers.append(tracker)
+    else:
+        # No local file provided, pull from GitHub
+        default_url = "https://raw.githubusercontent.com/maverick85/torrent-tools/refs/heads/main/trackers.txt"
+        print(f"🌐 No local file specified. Downloading default tracker list from:")
+        print(f"   {default_url}\n")
+        
+        try:
+            response = requests.get(default_url, timeout=10)
+            response.raise_for_status() # Check for HTTP errors
+            
+            # Read the response text line by line
+            for line in response.text.splitlines():
+                tracker = line.strip()
+                if tracker and not tracker.startswith('#'):
+                    trackers.append(tracker)
+                    
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error: Failed to download the default tracker list.")
+            print(f"Details: {e}")
+            sys.exit(1)
 
     if not trackers:
-        print(f"Error: No valid trackers found in '{args.file}'.")
+        print(f"Error: No valid trackers found.")
         sys.exit(1)
 
     check_hash_against_trackers(info_hash, trackers, args.retries, args.timeout, args.output)
