@@ -7,10 +7,125 @@ import random
 import string
 import requests
 import bencodepy
+import hashlib
+import urllib.parse
+from datetime import datetime
 from scrapeer import Scraper
 
 # Mute the verbose scrapeer INFO/ERROR logs
 logging.getLogger('scrapeer.scraper').setLevel(logging.CRITICAL)
+
+def format_size(size_in_bytes):
+    """Helper to convert bytes to human-readable sizes."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_in_bytes < 1024.0:
+            return f"{size_in_bytes:.2f} {unit}"
+        size_in_bytes /= 1024.0
+    return f"{size_in_bytes:.2f} PB"
+
+def display_torrent_info(file_path):
+    """Parses a .torrent file, prints its metadata, and returns the info hash."""
+    try:
+        with open(file_path, 'rb') as f:
+            meta = bencodepy.decode(f.read())
+            
+        info = meta[b'info']
+        info_hash = hashlib.sha1(bencodepy.encode(info)).hexdigest()
+        
+        name = info.get(b'name', b'Unknown').decode('utf-8', 'replace')
+        comment = meta.get(b'comment', b'').decode('utf-8', 'replace')
+        created_by = meta.get(b'created by', b'').decode('utf-8', 'replace')
+        
+        creation_date = "Unknown"
+        if b'creation date' in meta:
+            creation_date = datetime.fromtimestamp(meta[b'creation date']).strftime('%Y-%m-%d %H:%M:%S')
+            
+        piece_size = info.get(b'piece length', 0)
+        pieces = info.get(b'pieces', b'')
+        piece_count = len(pieces) // 20
+        
+        # Extract trackers
+        trackers = []
+        if b'announce-list' in meta:
+            for tier in meta[b'announce-list']:
+                for tr in tier:
+                    trackers.append(tr.decode('utf-8', 'replace'))
+        elif b'announce' in meta:
+            trackers.append(meta[b'announce'].decode('utf-8', 'replace'))
+            
+        # Extract Web Seeds
+        web_seeds = []
+        if b'url-list' in meta:
+            url_list = meta[b'url-list']
+            if isinstance(url_list, list):
+                for url in url_list:
+                    web_seeds.append(url.decode('utf-8', 'replace'))
+            else:
+                web_seeds.append(url_list.decode('utf-8', 'replace'))
+                
+        # Extract Files and Total Size
+        files = []
+        total_size = 0
+        if b'files' in info: # Multi-file torrent
+            for f_info in info[b'files']:
+                f_size = f_info.get(b'length', 0)
+                total_size += f_size
+                f_path = "/".join([p.decode('utf-8', 'replace') for p in f_info.get(b'path', [])])
+                files.append((f_path, f_size))
+        else: # Single-file torrent
+            total_size = info.get(b'length', 0)
+            files.append((name, total_size))
+            
+        # Build Magnet Link
+        magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={urllib.parse.quote(name)}"
+        for tr in trackers:
+            magnet += f"&tr={urllib.parse.quote(tr)}"
+            
+        # Print the Info Board
+        print("\n" + "=" * 60)
+        print("📄 TORRENT FILE INFORMATION")
+        print("=" * 60)
+        print(f"Name         : {name}")
+        print(f"Info Hash    : {info_hash}")
+        if comment: print(f"Comment      : {comment}")
+        print(f"Created Date : {creation_date}")
+        if created_by: print(f"Created By   : {created_by}")
+        print(f"Total Size   : {format_size(total_size)}")
+        print(f"Piece Size   : {format_size(piece_size)} ({piece_count} pieces)")
+        print(f"File Count   : {len(files)}")
+        print("-" * 60)
+        
+        if web_seeds:
+            print(f"Web Seeds    : {len(web_seeds)}")
+            for ws in web_seeds[:3]:
+                print(f"  - {ws}")
+            if len(web_seeds) > 3: print("  ... and more")
+            print("-" * 60)
+            
+        if trackers:
+            print(f"Trackers     : {len(trackers)} (embedded in file)")
+            for tr in trackers[:5]:
+                print(f"  - {tr}")
+            if len(trackers) > 5: print(f"  ... and {len(trackers)-5} more")
+            print("-" * 60)
+            
+        print("Files (Top 5):")
+        # Sort files by size (descending) to show the biggest files first
+        files.sort(key=lambda x: x[1], reverse=True)
+        for f_path, f_size in files[:5]:
+            print(f"  - {f_path} ({format_size(f_size)})")
+        if len(files) > 5:
+            print(f"  ... and {len(files)-5} more files")
+        print("-" * 60)
+        print("Magnet Link:")
+        print(magnet)
+        print("=" * 60 + "\n")
+        
+        return info_hash
+        
+    except Exception as e:
+        print(f"❌ Error parsing torrent file: {e}")
+        sys.exit(1)
 
 def check_http_tracker(tracker_url, info_hash, timeout=5):
     """Custom HTTP/HTTPS announce to mimic qBittorrent and bypass bot filters."""
@@ -117,34 +232,71 @@ def check_hash_against_trackers(info_hash, tracker_urls, retries=3, timeout=5, o
     print("* Note: Global peer counts usually contain duplicates")
     print("=" * 50)
 
+    # Output Handling
     if output_file:
         if active_trackers_list:
             try:
                 with open(output_file, 'w', encoding='utf-8') as f:
                     for t in active_trackers_list:
                         f.write(t + "\n")
-                print(f"💾 Saved {len(active_trackers_list)} active trackers to '{output_file}'\n")
+                print(f"\n💾 Saved {len(active_trackers_list)} active trackers to '{output_file}'\n")
             except Exception as e:
-                print(f"⚠️ Error saving to file: {e}\n")
+                print(f"\n⚠️ Error saving to file: {e}\n")
+    else:
+        if active_trackers_list:
+            print("\n" + "=" * 50)
+            print("📋 ACTIVE TRACKERS LIST (Copy & Paste)")
+            print("=" * 50)
+            for t in active_trackers_list:
+                print(t)
+            print("=" * 50 + "\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Robustly check a torrent info hash against a list of trackers.")
-    parser.add_argument("-H", "--hash", required=True, help="The 40-character hex info hash of the torrent.")
-    # Made --file optional (required=False)
-    parser.add_argument("-f", "--file", required=False, help="Path to the text file containing trackers. Defaults to maverick85's GitHub list if omitted.")
+    
+    # You must provide EITHER a Hash OR a Torrent file
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("-H", "--hash", help="The 40-character hex info hash of the torrent.")
+    group.add_argument("-T", "--torrent", help="Path to a .torrent file to extract hash and metadata from.")
+    
+    parser.add_argument("-I", "--info", action="store_true", help="Print detailed information about the provided .torrent file and exit.")
+    parser.add_argument("-f", "--file", required=False, help="Path to the text file containing trackers. Defaults to GitHub list.")
     parser.add_argument("-t", "--timeout", type=int, default=5, help="Seconds to wait for a tracker response (default: 5).")
     parser.add_argument("-r", "--retries", type=int, default=3, help="Number of times to retry a failed tracker (default: 3).")
     parser.add_argument("-o", "--output", type=str, help="Optional: Path to save a text file containing ONLY the active trackers.")
     
     args = parser.parse_args()
-    info_hash = args.hash.lower()
+    
+    info_hash = ""
+    
+    # Process the .torrent file if provided
+    if args.torrent:
+        if not os.path.isfile(args.torrent):
+            print(f"Error: The .torrent file '{args.torrent}' does not exist.")
+            sys.exit(1)
+        
+        # If --info is passed, print the board and exit immediately
+        if args.info:
+            display_torrent_info(args.torrent)
+            sys.exit(0) # <--- STOP HERE
+        else:
+            # Silently get the hash if they just want to scrape
+            with open(args.torrent, 'rb') as f:
+                meta = bencodepy.decode(f.read())
+            info_hash = hashlib.sha1(bencodepy.encode(meta[b'info'])).hexdigest()
+            
+    else:
+        # If no torrent file, process the provided hash
+        info_hash = args.hash.lower()
+        if args.info:
+            print("Error: The --info (-I) flag requires a .torrent file (-T) to display metadata. Cannot extract info from a raw hash.")
+            sys.exit(1) # Gracefully fail instead of ignoring the flag
     
     if len(info_hash) != 40:
         print(f"Warning: Info hash '{info_hash}' is not 40 characters long.")
     
+    # Load Trackers
     trackers = []
-    
-    # Check if a local file was provided
     if args.file:
         if not os.path.isfile(args.file):
             print(f"Error: The file '{args.file}' does not exist or cannot be read.")
@@ -157,21 +309,17 @@ def main():
                 if tracker and not tracker.startswith('#'):
                     trackers.append(tracker)
     else:
-        # No local file provided, pull from GitHub
         default_url = "https://raw.githubusercontent.com/maverick85/torrent-tools/refs/heads/main/trackers.txt"
         print(f"🌐 No local file specified. Downloading default tracker list from:")
         print(f"   {default_url}\n")
         
         try:
             response = requests.get(default_url, timeout=10)
-            response.raise_for_status() # Check for HTTP errors
-            
-            # Read the response text line by line
+            response.raise_for_status() 
             for line in response.text.splitlines():
                 tracker = line.strip()
                 if tracker and not tracker.startswith('#'):
                     trackers.append(tracker)
-                    
         except requests.exceptions.RequestException as e:
             print(f"❌ Error: Failed to download the default tracker list.")
             print(f"Details: {e}")
@@ -181,6 +329,7 @@ def main():
         print(f"Error: No valid trackers found.")
         sys.exit(1)
 
+    # Start scraping
     check_hash_against_trackers(info_hash, trackers, args.retries, args.timeout, args.output)
 
 if __name__ == "__main__":
