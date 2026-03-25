@@ -16,9 +16,9 @@ usage: tracker-check [-h] (-H HASH | -T TORRENT) [-I] [-f FILE] [-t TIMEOUT] [-r
 one of the arguments -H/--hash -T/--torrent is required
 ```
 
-`tracker-check -H <hash>`: scrapes an hash against the torrent list
-`tracker-check -T <torrent> -I`: Prints torrent information
-`tracker-check -T <torrent>`: Extracts the torrent hash and scrapes against the tracker list
+- `tracker-check -H <hash>`: scrapes an hash against the torrent list
+- `tracker-check -T <torrent> -I`: Prints torrent information
+- `tracker-check -T <torrent>`: Extracts the torrent hash and scrapes against the tracker list
 
 Flags:
 - `-H` or `--hash`: Torrent hash
