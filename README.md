@@ -6,15 +6,16 @@
 
 #### Installation
 - Add the tracker-check file to your `/usr/local/bin/` or `~/.local/bin/` or whatever location suits you.
-- Requires `scrapeer` (pip install scrapeer)
+- Requires `scrapeer` (`pip install scrapeer`)
+- Requires `bencodepy` (`pip install bencodepy`)
 - Make the file executable with `chmod +x tracker-check`
 
 #### Usage
-Run: `tracker-check -H <hash> -f <tracker-file-location>`
+Run: `tracker-check -H <hash>`
 
 Flags:
 - `-H` or `--hash`: The torrent hash
-- `-f` or `--file`: The tracker file list. One tracker per line.
-- `-r` or `--retries`: retries
-- `-t` or `--timeout`: timeout in seconds
-- `-o` or `--output`: output file with active trackers
+- `-f` or `--file`: Optional: The tracker file list. One tracker per line.
+- `-r` or `--retries`: Optional: retries
+- `-t` or `--timeout`: Optional: timeout in seconds
+- `-o` or `--output`: Optional: output file with active trackers
